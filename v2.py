@@ -1,127 +1,276 @@
 #!/usr/bin/env python3
+
 import argparse
 import subprocess
 import uuid
 import time
+import sys
 from datetime import datetime
 
 try:
-    from colorama import init, Fore, Style # Colors = good
-    init()
+    from colorama import init, Fore, Style
+
+    init(autoreset=True)
     COLORS_AVAILABLE = True
 except ImportError:
     COLORS_AVAILABLE = False
-    
+
     class Fore:
-        RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = RESET = ''
+        RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = RESET = ""
+
     class Style:
-        RESET_ALL = BRIGHT = DIM = ''
+        RESET_ALL = BRIGHT = DIM = ""
 
 
-PUSH_INTERVAL = 100000000
+PUSH_INTERVAL = 50000
 
-def push_if_needed(count, args, color_fore, color_style):
-    if args.push:
-        if args.dry_run:
-            print(f"{color_fore.YELLOW}[DRY RUN]{color_style.RESET_ALL} {color_fore.WHITE}git push{color_style.RESET_ALL} {color_fore.CYAN}(after {count} commits){color_style.RESET_ALL}")
-        else:
-            print(f"{color_fore.BLUE}Pushing commits after {color_fore.WHITE}{count}{color_fore.BLUE}...{color_style.RESET_ALL}")
-            subprocess.run(["git", "push"], check=True)
-            print(f"{color_fore.GREEN}✓{color_style.RESET_ALL} {color_fore.WHITE}Push completed{color_style.RESET_ALL}")
-        print() 
 
-def format_stats_line(i, count, start_time, color_fore, color_style, msg=""):
-    """Format and return single-line progress string"""
-    current_time = time.time()
-    total_elapsed = current_time - start_time
-    
-    commits_per_sec = i / total_elapsed if total_elapsed > 0 else 0
-    eta_seconds = (count - i) / commits_per_sec if commits_per_sec > 0 else 0
-    eta_minutes = eta_seconds / 60
-    
-    progress_percent = (i / count) * 100
-    
-    bar_width = 20
-    filled = int(bar_width * (i / count))
-    bar = "█" * filled + "░" * (bar_width - filled)
-    
-    stats = (
-        f"\r{color_fore.CYAN}[{i:>{len(str(count))}}/{count}]{color_style.RESET_ALL} "
-        f"{color_fore.GREEN}[{bar}]{color_style.RESET_ALL} "
-        f"{color_fore.MAGENTA}{progress_percent:>5.1f}%{color_style.RESET_ALL} "
-        f"{color_fore.WHITE}{commits_per_sec:>6.2f}{color_fore.GREEN}(+{commits_per_sec:>4.0f}/s){color_style.RESET_ALL} "
-        f"{color_fore.BLUE}ETA:{color_fore.WHITE}{eta_minutes:>4.1f}m{color_style.RESET_ALL} "
-        f"{color_fore.YELLOW}{msg[:8]}...{color_style.RESET_ALL}"
-    )
-    return stats
-
-def get_color_classes(no_color=False):
-    """Return color classes based on availability and preference"""
+def get_colors(no_color=False):
     if no_color or not COLORS_AVAILABLE:
+
         class NoColorFore:
-            RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = RESET = ''
+            RED = GREEN = YELLOW = BLUE = MAGENTA = CYAN = WHITE = RESET = ""
+
         class NoColorStyle:
-            RESET_ALL = BRIGHT = DIM = ''
+            RESET_ALL = BRIGHT = DIM = ""
+
         return NoColorFore(), NoColorStyle()
-    else:
-        return Fore, Style
 
-def main():
-    parser = argparse.ArgumentParser(description="Create multiple git commits with statistics")
-    parser.add_argument("count", type=int, help="Number of commits")
-    parser.add_argument("-p", "--push", action="store_true", help="Push commits")
-    parser.add_argument("--dry-run", action="store_true", help="Show commands only")
-    parser.add_argument("--no-color", action="store_true", help="Disable colored output")
-    args = parser.parse_args()
+    return Fore, Style
 
-    color_fore, color_style = get_color_classes(args.no_color)
 
-    if args.count <= 0:
-        raise SystemExit(f"{color_fore.RED}Error: Count must be positive{color_style.RESET_ALL}")
+def run_git_command(cmd):
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True
+    )
 
-    print(f"{color_fore.CYAN}Starting to create {color_fore.WHITE}{args.count}{color_fore.CYAN} commits...{color_style.RESET_ALL}")
-    print(f"{color_fore.YELLOW}Push interval: {color_fore.WHITE}every {PUSH_INTERVAL} commits{color_style.RESET_ALL}")
-    print(f"{color_fore.GREEN}Time: {color_fore.WHITE}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{color_style.RESET_ALL}")
-    print(f"{color_fore.BLUE}{'=' * 80}{color_style.RESET_ALL}")
 
-    start_time = time.time()
+def verify_git_repo():
+    result = run_git_command(["git", "rev-parse", "--is-inside-work-tree"])
 
-    for i in range(1, args.count + 1):
-        msg = str(uuid.uuid4())
+    if result.returncode != 0:
+        print(f"{F.RED}✗ Not inside a git repository{S.RESET_ALL}")
+        sys.exit(1)
 
-        if args.dry_run:
-            progress_line = format_stats_line(i, args.count, start_time, color_fore, color_style, "[DRY RUN]")
-            print(progress_line, end="", flush=True)
-        else:
-            try:
-                subprocess.run(["git", "commit", "--allow-empty", "-m", msg], 
-                             check=True, capture_output=True)
-                progress_line = format_stats_line(i, args.count, start_time, color_fore, color_style, msg)
-                print(progress_line, end="", flush=True)
-            except subprocess.CalledProcessError as e:
-                error_line = f"\r{color_fore.RED}✗ Error creating commit {i}: {e}{color_style.RESET_ALL}"
-                print(error_line)
-                continue
 
-        if i % PUSH_INTERVAL == 0:
-            print()
-            push_if_needed(i, args, color_fore, color_style)
-            print(f"{color_fore.BLUE}{'=' * 80}{color_style.RESET_ALL}")
+def verify_git_identity():
+    name = run_git_command(["git", "config", "user.name"])
+    email = run_git_command(["git", "config", "user.email"])
 
-    print("\r" + " " * 100 + "\r", end="")
-
-    if args.count % PUSH_INTERVAL != 0:
+    if not name.stdout.strip() or not email.stdout.strip():
+        print(f"{F.RED}✗ Git identity is not configured{S.RESET_ALL}")
         print()
-        push_if_needed(args.count, args, color_fore, color_style)
+        print(f"{F.YELLOW}Run:{S.RESET_ALL}")
+        print('git config --global user.name "yourname"')
+        print('git config --global user.email "you@example.com"')
+        sys.exit(1)
 
-    total_time = time.time() - start_time
-    final_speed = args.count / total_time if total_time > 0 else 0
-    
-    print(f"{color_fore.BLUE}{'=' * 80}{color_style.RESET_ALL}")
-    print(f"{color_fore.GREEN}✓{color_style.RESET_ALL} {color_fore.WHITE}Completed {color_fore.CYAN}{args.count}{color_fore.WHITE} commits in {color_fore.YELLOW}{total_time:.2f}{color_fore.WHITE} seconds{color_style.RESET_ALL}")
-    print(f"{color_fore.CYAN}Average speed:{color_style.RESET_ALL} {color_fore.WHITE}{final_speed:.2f}{color_fore.GREEN} commits/second (+{final_speed:.0f}/s){color_style.RESET_ALL}")
-    print(f"{color_fore.YELLOW}Finished at:{color_style.RESET_ALL} {color_fore.WHITE}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{color_style.RESET_ALL}")
-    print(f"{color_fore.BLUE}{'=' * 80}{color_style.RESET_ALL}")
 
-if __name__ == "__main__":
-    main()
+def push_commits(current_count, dry_run):
+    print()
+
+    if dry_run:
+        print(
+            f"{F.YELLOW}[DRY RUN]{S.RESET_ALL} "
+            f"{F.WHITE}git push{S.RESET_ALL} "
+            f"{F.CYAN}(after {current_count} commits){S.RESET_ALL}"
+        )
+        return
+
+    print(
+        f"{F.BLUE}Pushing after "
+        f"{F.WHITE}{current_count}{S.RESET_ALL} "
+        f"{F.BLUE}commits...{S.RESET_ALL}"
+    )
+
+    result = run_git_command(["git", "push"])
+
+    if result.returncode != 0:
+        print(f"{F.RED}✗ Push failed{S.RESET_ALL}")
+
+        if result.stderr:
+            print(result.stderr.strip())
+
+        return
+
+    print(f"{F.GREEN}✓ Push completed{S.RESET_ALL}")
+
+
+def progress_line(i, total, start_time):
+    elapsed = time.time() - start_time
+
+    rate = i / elapsed if elapsed > 0 else 0
+
+    eta = (total - i) / rate if rate > 0 else 0
+
+    percent = (i / total) * 100
+
+    width = 24
+    filled = int(width * (i / total))
+
+    bar = "█" * filled + "░" * (width - filled)
+
+    return (
+        f"\r"
+        f"{F.CYAN}[{i:>{len(str(total))}}/{total}]{S.RESET_ALL} "
+        f"{F.GREEN}[{bar}]{S.RESET_ALL} "
+        f"{F.MAGENTA}{percent:>6.2f}%{S.RESET_ALL} "
+        f"{F.WHITE}{rate:>7.2f}{S.RESET_ALL} "
+        f"{F.GREEN}commits/s{S.RESET_ALL} "
+        f"{F.BLUE}ETA:{S.RESET_ALL} "
+        f"{F.WHITE}{eta:>7.1f}s{S.RESET_ALL}"
+    )
+
+
+parser = argparse.ArgumentParser(
+    description="Mass git empty commit generator"
+)
+
+parser.add_argument(
+    "count",
+    type=int,
+    help="Number of commits to create"
+)
+
+parser.add_argument(
+    "-p",
+    "--push",
+    action="store_true",
+    help="Push commits periodically"
+)
+
+parser.add_argument(
+    "--dry-run",
+    action="store_true",
+    help="Do not execute git commands"
+)
+
+parser.add_argument(
+    "--no-color",
+    action="store_true",
+    help="Disable colored output"
+)
+
+args = parser.parse_args()
+
+F, S = get_colors(args.no_color)
+
+if args.count <= 0:
+    print(f"{F.RED}✗ Count must be greater than 0{S.RESET_ALL}")
+    sys.exit(1)
+
+if not args.dry_run:
+    verify_git_repo()
+    verify_git_identity()
+
+print(
+    f"{F.CYAN}Starting creation of "
+    f"{F.WHITE}{args.count}{S.RESET_ALL} "
+    f"{F.CYAN}commits{S.RESET_ALL}"
+)
+
+print(
+    f"{F.YELLOW}Push interval:{S.RESET_ALL} "
+    f"{F.WHITE}{PUSH_INTERVAL}{S.RESET_ALL}"
+)
+
+print(
+    f"{F.GREEN}Started:{S.RESET_ALL} "
+    f"{F.WHITE}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{S.RESET_ALL}"
+)
+
+print(f"{F.BLUE}{'=' * 90}{S.RESET_ALL}")
+
+start_time = time.time()
+
+successful = 0
+failed = 0
+
+for i in range(1, args.count + 1):
+    msg = str(uuid.uuid4())
+
+    if args.dry_run:
+        print(progress_line(...))
+        time.sleep(0.002)
+        successful += 1
+        continue
+
+    result = run_git_command([
+        "git",
+        "commit",
+        "--allow-empty",
+        "-m",
+        msg
+    ])
+
+    if result.returncode != 0:
+        failed += 1
+
+        print()
+
+        print(
+            f"{F.RED}✗ Failed commit {i}{S.RESET_ALL}"
+        )
+
+        if result.stderr:
+            print(
+                f"{F.YELLOW}stderr:{S.RESET_ALL}"
+            )
+            print(result.stderr.strip())
+
+        if result.stdout:
+            print(
+                f"{F.YELLOW}stdout:{S.RESET_ALL}"
+            )
+            print(result.stdout.strip())
+
+        continue
+
+    successful += 1
+
+    print(progress_line(...))
+
+    if args.push and i % PUSH_INTERVAL == 0:
+        push_commits(i, args.dry_run)
+
+print("\r" + (" " * 120) + "\r", end="")
+
+if args.push and args.count % PUSH_INTERVAL != 0:
+    push_commits(args.count, args.dry_run)
+
+elapsed = time.time() - start_time
+
+rate = successful / elapsed if elapsed > 0 else 0
+
+print(f"{F.BLUE}{'=' * 90}{S.RESET_ALL}")
+
+print(
+    f"{F.GREEN}✓ Completed{S.RESET_ALL} "
+    f"{F.WHITE}{successful}{S.RESET_ALL} "
+    f"{F.GREEN}commits{S.RESET_ALL}"
+)
+
+print(
+    f"{F.RED}✗ Failed:{S.RESET_ALL} "
+    f"{F.WHITE}{failed}{S.RESET_ALL}"
+)
+
+print(
+    f"{F.CYAN}Time elapsed:{S.RESET_ALL} "
+    f"{F.WHITE}{elapsed:.2f}s{S.RESET_ALL}"
+)
+
+print(
+    f"{F.YELLOW}Average speed:{S.RESET_ALL} "
+    f"{F.WHITE}{rate:.2f}{S.RESET_ALL} "
+    f"{F.GREEN}commits/s{S.RESET_ALL}"
+)
+
+print(
+    f"{F.MAGENTA}Finished:{S.RESET_ALL} "
+    f"{F.WHITE}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{S.RESET_ALL}"
+)
+
+print(f"{F.BLUE}{'=' * 90}{S.RESET_ALL}")
