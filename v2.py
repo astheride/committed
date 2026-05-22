@@ -5,6 +5,7 @@ import subprocess
 import uuid
 import time
 import sys
+import os
 from datetime import datetime
 
 try:
@@ -23,6 +24,7 @@ except ImportError:
 
 
 PUSH_INTERVAL = 50000
+LOG_EVERY = 100
 
 
 def get_colors(no_color=False):
@@ -48,7 +50,11 @@ def run_git_command(cmd):
 
 
 def verify_git_repo():
-    result = run_git_command(["git", "rev-parse", "--is-inside-work-tree"])
+    result = run_git_command([
+        "git",
+        "rev-parse",
+        "--is-inside-work-tree"
+    ])
 
     if result.returncode != 0:
         print(f"{F.RED}✗ Not inside a git repository{S.RESET_ALL}")
@@ -68,6 +74,23 @@ def verify_git_identity():
         sys.exit(1)
 
 
+def cleanup_stale_lock():
+    lock_path = ".git/HEAD.lock"
+
+    if os.path.exists(lock_path):
+        print(f"{F.YELLOW}Removing stale HEAD.lock{S.RESET_ALL}")
+
+        try:
+            os.remove(lock_path)
+        except Exception as e:
+            print(f"{F.RED}Failed removing HEAD.lock: {e}{S.RESET_ALL}")
+
+
+def disable_git_gc():
+    run_git_command(["git", "config", "maintenance.auto", "false"])
+    run_git_command(["git", "config", "gc.auto", "0"])
+
+
 def push_commits(current_count, dry_run):
     print()
 
@@ -82,7 +105,7 @@ def push_commits(current_count, dry_run):
     print(
         f"{F.BLUE}Pushing after "
         f"{F.WHITE}{current_count}{S.RESET_ALL} "
-        f"{F.BLUE}commits...{S.RESET_ALL}"
+        f"{F.BLUE} commits...{S.RESET_ALL}"
     )
 
     result = run_git_command(["git", "push"])
@@ -113,14 +136,11 @@ def progress_line(i, total, start_time):
     bar = "█" * filled + "░" * (width - filled)
 
     return (
-        f"\r"
-        f"{F.CYAN}[{i:>{len(str(total))}}/{total}]{S.RESET_ALL} "
-        f"{F.GREEN}[{bar}]{S.RESET_ALL} "
-        f"{F.MAGENTA}{percent:>6.2f}%{S.RESET_ALL} "
-        f"{F.WHITE}{rate:>7.2f}{S.RESET_ALL} "
-        f"{F.GREEN}commits/s{S.RESET_ALL} "
-        f"{F.BLUE}ETA:{S.RESET_ALL} "
-        f"{F.WHITE}{eta:>7.1f}s{S.RESET_ALL}"
+        f"[{i:>{len(str(total))}}/{total}] "
+        f"[{bar}] "
+        f"{percent:>6.2f}% "
+        f"{rate:>7.2f} commits/s "
+        f"ETA: {eta:>7.1f}s"
     )
 
 
@@ -164,16 +184,23 @@ if args.count <= 0:
 if not args.dry_run:
     verify_git_repo()
     verify_git_identity()
+    cleanup_stale_lock()
+    disable_git_gc()
 
 print(
     f"{F.CYAN}Starting creation of "
     f"{F.WHITE}{args.count}{S.RESET_ALL} "
-    f"{F.CYAN}commits{S.RESET_ALL}"
+    f"{F.CYAN} commits{S.RESET_ALL}"
 )
 
 print(
     f"{F.YELLOW}Push interval:{S.RESET_ALL} "
     f"{F.WHITE}{PUSH_INTERVAL}{S.RESET_ALL}"
+)
+
+print(
+    f"{F.YELLOW}Log interval:{S.RESET_ALL} "
+    f"{F.WHITE}{LOG_EVERY}{S.RESET_ALL}"
 )
 
 print(
@@ -192,9 +219,12 @@ for i in range(1, args.count + 1):
     msg = str(uuid.uuid4())
 
     if args.dry_run:
-        print(progress_line(...))
-        time.sleep(0.002)
         successful += 1
+
+        if i % LOG_EVERY == 0 or i == args.count:
+            print(progress_line(i, args.count, start_time))
+
+        time.sleep(0.001)
         continue
 
     result = run_git_command([
@@ -215,27 +245,25 @@ for i in range(1, args.count + 1):
         )
 
         if result.stderr:
-            print(
-                f"{F.YELLOW}stderr:{S.RESET_ALL}"
-            )
+            print(f"{F.YELLOW}stderr:{S.RESET_ALL}")
             print(result.stderr.strip())
 
         if result.stdout:
-            print(
-                f"{F.YELLOW}stdout:{S.RESET_ALL}"
-            )
+            print(f"{F.YELLOW}stdout:{S.RESET_ALL}")
             print(result.stdout.strip())
+
+        if "HEAD.lock" in result.stderr:
+            cleanup_stale_lock()
 
         continue
 
     successful += 1
 
-    print(progress_line(...))
+    if i % LOG_EVERY == 0 or i == args.count:
+        print(progress_line(i, args.count, start_time))
 
     if args.push and i % PUSH_INTERVAL == 0:
         push_commits(i, args.dry_run)
-
-print("\r" + (" " * 120) + "\r", end="")
 
 if args.push and args.count % PUSH_INTERVAL != 0:
     push_commits(args.count, args.dry_run)
@@ -247,9 +275,8 @@ rate = successful / elapsed if elapsed > 0 else 0
 print(f"{F.BLUE}{'=' * 90}{S.RESET_ALL}")
 
 print(
-    f"{F.GREEN}✓ Completed{S.RESET_ALL} "
-    f"{F.WHITE}{successful}{S.RESET_ALL} "
-    f"{F.GREEN}commits{S.RESET_ALL}"
+    f"{F.GREEN}✓ Completed:{S.RESET_ALL} "
+    f"{F.WHITE}{successful}{S.RESET_ALL}"
 )
 
 print(
@@ -258,14 +285,13 @@ print(
 )
 
 print(
-    f"{F.CYAN}Time elapsed:{S.RESET_ALL} "
+    f"{F.CYAN}Elapsed:{S.RESET_ALL} "
     f"{F.WHITE}{elapsed:.2f}s{S.RESET_ALL}"
 )
 
 print(
     f"{F.YELLOW}Average speed:{S.RESET_ALL} "
-    f"{F.WHITE}{rate:.2f}{S.RESET_ALL} "
-    f"{F.GREEN}commits/s{S.RESET_ALL}"
+    f"{F.WHITE}{rate:.2f}{S.RESET_ALL} commits/s"
 )
 
 print(
